@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HUNT THE MALWARE // SysAdmin Terminal v1.0</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+  :root {
+    --green:      #00ff88;
+    --green-dim:  #00cc66;
+    --green-dark: #003322;
+    --green-glow: rgba(0,255,136,0.18);
+    --cyan:       #00eeff;
+    --red:        #ff2244;
+    --red-dim:    #cc1133;
+    --yellow:     #ffcc00;
+    --orange:     #ff8800;
+    --bg:         #050d0a;
+    --bg-panel:   #080f0c;
+    --bg-node:    #0a1a12;
+    --border:     #0a3320;
+    --border-hi:  #00ff8844;
+    --text-dim:   #336644;
+    --mono: 'Share Tech Mono', 'Courier New', monospace;
+    --display: 'Orbitron', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--green);
+    font-family: var(--mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+  /* ── Scanline overlay ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.07) 2px,
+      rgba(0,0,0,0.07) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── Header ── */
+  #header {
+    text-align: center;
+    padding: 18px 20px 10px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  #header h1 {
+    font-family: var(--display);
+    font-size: clamp(14px, 3vw, 26px);
+    font-weight: 900;
+    letter-spacing: 0.18em;
+    color: var(--green);
+    text-shadow: 0 0 20px var(--green), 0 0 40px rgba(0,255,136,0.3);
+  }
+  #header .sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.25em;
+    margin-top: 4px;
+  }
+  #header .blink {
+    animation: blink 1.2s step-end infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* ── Main layout ── */
+  #app {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: 1fr;
+    gap: 0;
+    max-width: 1100px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 20px;
+    gap: 20px;
+  }
+  @media (max-width: 720px) {
+    #app { grid-template-columns: 1fr; padding: 12px; gap: 14px; }
+  }
+
+  /* ── Grid arena ── */
+  #arena {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  #grid-wrap {
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+  }
+
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  .cell {
+    aspect-ratio: 1;
+    border: 1px solid var(--border);
+    background: var(--bg-node);
+    border-radius: 4px;
+    cursor: not-allowed;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.15s, background 0.15s;
+    overflow: hidden;
+    font-size: clamp(8px, 1.8vw, 13px);
+    color: var(--text-dim);
+    user-select: none;
+  }
+
+  /* Fog of war */
+  .cell.fogged {
+    background: #020805;
+    border-color: #050d08;
+  }
+
+  /* Visited (revealed, not current) */
+  .cell.visited {
+    cursor: default;
+    border-color: var(--border);
+    color: var(--text-dim);
+  }
+
+  /* Adjacent (clickable in move/shoot mode) */
+  .cell.adjacent {
+    cursor: pointer;
+    border-color: var(--green-dim);
+    background: #0d2019;
+  }
+  .cell.adjacent:hover {
+    background: #102a1e;
+    border-color: var(--green);
+  }
+
+  /* Shoot-mode adjacent */
+  .cell.adjacent.shoot-mode {
+    border-color: var(--red);
+    background: #1a0508;
+    cursor: crosshair;
+  }
+  .cell.adjacent.shoot-mode:hover {
+    background: #220609;
+    border-color: #ff4466;
+  }
+
+  /* Current player node */
+  .cell.current {
+    border: 2px solid var(--green);
+    background: var(--green-dark);
+    cursor: default;
+    box-shadow: inset 0 0 14px var(--green-glow);
+  }
+
+  /* Flash states */
+  .cell.flash-red {
+    animation: flashRed 0.5s ease-out;
+  }
+  .cell.flash-green {
+    animation: flashGreen 0.4s ease-out;
+  }
+  @keyframes flashRed {
+    0%  { background: #330010; border-color: var(--red); }
+    100%{ background: var(--bg-node); }
+  }
+  @keyframes flashGreen {
+    0%  { background: #003322; border-color: var(--green); }
+    100%{ }
+  }
+
+  /* Grid shake on error */
+  @keyframes shake {
+    0%,100%{ transform:translateX(0) }
+    20%{ transform:translateX(-6px) }
+    40%{ transform:translateX(6px) }
+    60%{ transform:translateX(-4px) }
+    80%{ transform:translateX(4px) }
+  }
+  #grid-wrap.shake { animation: shake 0.35s ease; }
+
+  /* Cell label */
+  .cell-id {
+    position: absolute;
+    top: 3px; left: 5px;
+    font-size: 9px;
+    opacity: 0.35;
+    font-family: var(--mono);
+  }
+
+  /* Cell icons */
+  .cell-icon {
+    font-size: clamp(14px, 2.8vw, 22px);
+    line-height: 1;
+    filter: none;
+  }
+
+  /* Post-game reveal */
+  .cell.reveal-wumpus  { background: #1a0008; border-color: var(--red); }
+  .cell.reveal-pit     { background: #0a0a1a; border-color: #4444ff; }
+  .cell.reveal-bat     { background: #1a1400; border-color: var(--yellow); }
+
+  /* ── Controls bar ── */
+  #controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+    max-width: 480px;
+  }
+
+  .btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    padding: 8px 16px;
+    background: transparent;
+    color: var(--green);
+    border: 1px solid var(--green-dim);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--green-dark); border-color: var(--green); }
+  .btn:active { transform: scale(0.97); }
+
+  .btn.armed {
+    color: var(--red);
+    border-color: var(--red-dim);
+    background: #1a0508;
+  }
+  .btn.armed:hover { background: #220609; border-color: var(--red); }
+
+  .btn.danger {
+    color: var(--red);
+    border-color: var(--red-dim);
+  }
+  .btn.danger:hover { background: #1a0508; }
+
+  /* ── Side panel ── */
+  #panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .panel-box {
+    border: 1px solid var(--border);
+    background: var(--bg-panel);
+    border-radius: 4px;
+    padding: 14px;
+  }
+
+  .panel-box h2 {
+    font-family: var(--display);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+
+  /* Status rows */
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--text-dim); letter-spacing: 0.05em; }
+  .stat-val   { color: var(--green); font-weight: bold; }
+  .stat-val.danger { color: var(--red); }
+  .stat-val.warn   { color: var(--yellow); }
+
+  /* Kill signal pips */
+  #signal-pips {
+    display: flex;
+    gap: 5px;
+    margin-top: 6px;
+  }
+  .pip {
+    width: 18px; height: 18px;
+    border-radius: 2px;
+    background: var(--green);
+    transition: all 0.3s;
+  }
+  .pip.spent {
+    background: #0a1a12;
+    border: 1px solid var(--border);
+  }
+
+  /* Log terminal */
+  #log {
+    flex: 1;
+    min-height: 220px;
+    max-height: 340px;
+    overflow-y: auto;
+    font-size: 11.5px;
+    line-height: 1.65;
+    color: var(--green-dim);
+  }
+  #log::-webkit-scrollbar { width: 4px; }
+  #log::-webkit-scrollbar-track { background: transparent; }
+  #log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .log-line { padding: 1px 0; }
+  .log-line.warn  { color: var(--yellow); }
+  .log-line.error { color: var(--red); }
+  .log-line.info  { color: var(--cyan); }
+  .log-line.success { color: var(--green); }
+  .log-line.dim   { color: var(--text-dim); font-size: 10.5px; }
+
+  .log-ts {
+    color: var(--text-dim);
+    font-size: 10px;
+    margin-right: 4px;
+  }
+
+  /* ── Mini map legend ── */
+  .legend {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px 10px;
+    font-size: 10.5px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; color: var(--text-dim); }
+  .legend-dot  { width: 10px; height: 10px; border-radius: 1px; flex-shrink: 0; }
+
+  /* ── Overlay (win / lose screen) ── */
+  #overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.88);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+  }
+  #overlay.show { display: flex; }
+
+  #overlay-box {
+    border: 1px solid var(--green);
+    background: var(--bg);
+    padding: 36px 48px;
+    text-align: center;
+    max-width: 440px;
+    width: 90%;
+    border-radius: 4px;
+  }
+  #overlay-box.lose { border-color: var(--red); }
+
+  #overlay-title {
+    font-family: var(--display);
+    font-size: clamp(18px, 4vw, 28px);
+    font-weight: 900;
+    letter-spacing: 0.15em;
+    margin-bottom: 10px;
+  }
+  #overlay-title.win  { color: var(--green); text-shadow: 0 0 20px var(--green); }
+  #overlay-title.lose { color: var(--red);   text-shadow: 0 0 20px var(--red); }
+  #overlay-msg {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    line-height: 1.7;
+  }
+
+  /* ── Keyboard hint ── */
+  kbd {
+    display: inline-block;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text-dim);
+  }
+  #keyboard-hint {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: -6px;
+  }
+
+  /* ── Typing cursor on log ── */
+  #log-cursor { display: inline-block; animation: blink 1s step-end infinite; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>// HUNT THE MALWARE //</h1>
+  <div class="sub">SYSADMIN TERMINAL v1.0 &nbsp;|&nbsp; CLUSTER: 5×5 NODE GRID &nbsp;|&nbsp; <span class="blink">■</span> ONLINE</div>
+</div>
+
+<div id="app">
+
+  <!-- ══ ARENA ══ -->
+  <div id="arena">
+    <div id="grid-wrap">
+      <div id="grid"></div>
+    </div>
+    <div id="controls">
+      <button class="btn" id="btn-mode" onclick="Game.toggleMode()">MODE: MOVE</button>
+      <button class="btn danger" id="btn-new" onclick="Game.init()">NEW MISSION</button>
+    </div>
+    <div id="keyboard-hint">
+      <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / Arrow keys to navigate &nbsp;·&nbsp;
+      <kbd>Space</kbd> / <kbd>Shift</kbd> toggle fire mode
+    </div>
+  </div>
+
+  <!-- ══ SIDE PANEL ══ -->
+  <div id="panel">
+
+    <!-- Status -->
+    <div class="panel-box">
+      <h2>// System Status</h2>
+      <div class="stat-row">
+        <span class="stat-label">OPERATOR</span>
+        <span class="stat-val" id="st-status">ONLINE</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">LOCATION</span>
+        <span class="stat-val" id="st-node">NODE 00</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-label">MODE</span>
+        <span class="stat-val" id="st-mode">MOVE</span>
+      </div>
+      <div class="stat-row" style="border-bottom:none; flex-direction: column; align-items:flex-start; gap:6px;">
+        <span class="stat-label">KILL SIGNALS</span>
+        <div id="signal-pips"></div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="panel-box" style="flex:1; display:flex; flex-direction:column;">
+      <h2>// System Logs</h2>
+      <div id="log"></div>
+    </div>
+
+    <!-- Legend -->
+    <div class="panel-box">
+      <h2>// Entity Legend</h2>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div>YOU (SysAdmin)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#555"></div>Fogged Node</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div>Ransomware ⚠</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#333a00"></div>Visited Node</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#00008a"></div>Kernel Panic ⚠</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3a3000"></div>Adjacent Node</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#8a6200"></div>Load Balancer ⚠</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--green-dark)"></div>Your Position</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ END OVERLAY ══ -->
+<div id="overlay">
+  <div id="overlay-box">
+    <div id="overlay-title">MISSION COMPLETE</div>
+    <div id="overlay-msg"></div>
+    <button class="btn" onclick="Game.init()" style="font-size:14px; padding:10px 28px;">
+      REBOOT MISSION
+    </button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  HUNT THE MALWARE  –  Core game engine
+//  Architecture: GameState (pure data) ←→ Renderer (pure DOM)
+//  The Game object wires them together and handles input.
+// ═══════════════════════════════════════════════════════════════════
+
+// ─────────────────────────── CONSTANTS ──────────────────────────────
+const GRID_SIZE     = 5;         // 5×5 = 25 nodes
+const TOTAL_NODES   = GRID_SIZE * GRID_SIZE;
+const MAX_SIGNALS   = 5;
+const N_PANICS      = 2;
+const N_BALANCERS   = 2;
+
+// Cell index helpers
+const idx  = (r, c) => r * GRID_SIZE + c;   // row,col → flat index
+const row  = i => Math.floor(i / GRID_SIZE);
+const col  = i => i % GRID_SIZE;
+
+// Cardinal neighbours (no diagonal, no wrap)
+function neighbours(i) {
+  const r = row(i), c = col(i), ns = [];
+  if (r > 0)             ns.push(idx(r-1, c));  // up
+  if (r < GRID_SIZE-1)   ns.push(idx(r+1, c));  // down
+  if (c > 0)             ns.push(idx(r, c-1));  // left
+  if (c < GRID_SIZE-1)   ns.push(idx(r, c+1));  // right
+  return ns;
+}
+
+// ─────────────────────────── GameState ──────────────────────────────
+// Pure data store — no DOM references.
+class GameState {
+  constructor() {
+    // Place all entities on unique random cells
+    const positions = this._shuffle([...Array(TOTAL_NODES).keys()]).slice(0, 1 + N_PANICS + N_BALANCERS + 1);
+    // [player, ...panics, ...balancers, ransomware]
+    this.player      = positions[0];
+    this.panics      = new Set([positions[1], positions[2]]);
+    this.balancers   = new Set([positions[3], positions[4]]);
+    this.ransomware  = positions[5];
+
+    this.signals     = MAX_SIGNALS;   // remaining kill signals
+    this.status      = 'playing';     // 'playing' | 'win' | 'lose'
+    this.loseReason  = '';
+
+    // Fog of war: Set of revealed cell indices
+    this.revealed    = new Set([this.player]);
+    // All previously visited cells (never re-fogged)
+    this.visited     = new Set([this.player]);
+
+    this.mode        = 'move';        // 'move' | 'shoot'
+  }
+
+  // Fisher-Yates shuffle
+  _shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // Reveal the player's current cell and its neighbours
+  revealAdjacent() {
+    this.revealed.add(this.player);
+    this.visited.add(this.player);
+    for (const n of neighbours(this.player)) {
+      this.revealed.add(n);
+    }
+  }
+
+  // Detect which hazards are adjacent to the player — returns array of strings
+  hazardClues() {
+    const clues = [];
+    const adj   = new Set(neighbours(this.player));
+    if (adj.has(this.ransomware))                          clues.push('cpu');
+    if ([...this.panics].some(p => adj.has(p)))            clues.push('leak');
+    if ([...this.balancers].some(b => adj.has(b)))         clues.push('routing');
+    return clues;
+  }
+
+  // Move player to target cell. Returns outcome string.
+  movePlayer(target) {
+    if (!neighbours(this.player).includes(target)) return 'invalid';
+
+    this.player = target;
+    this.visited.add(target);
+    this.revealAdjacent();
+
+    // ── Hazard resolution: pit → balancer → ransomware ──
+    if (this.panics.has(target)) {
+      this.status = 'lose';
+      this.loseReason = 'KERNEL PANIC — catastrophic memory fault. Process terminated.';
+      return 'pit';
+    }
+    if (this.balancers.has(target)) {
+      // Teleport to a random safe node (not pit, not ransomware, not current)
+      const unsafe = new Set([...this.panics, this.ransomware, target]);
+      const safe   = [...Array(TOTAL_NODES).keys()].filter(i => !unsafe.has(i));
+      this.player  = safe[Math.floor(Math.random() * safe.length)];
+      this.visited.add(this.player);
+      this.revealAdjacent();
+      return 'bat';
+    }
+    if (target === this.ransomware) {
+      this.status = 'lose';
+      this.loseReason = 'RANSOMWARE EXECUTED — all data encrypted. System compromised.';
+      return 'wumpus';
+    }
+    return 'ok';
+  }
+
+  // Fire a kill signal into target cell. Returns outcome string.
+  fireSignal(target) {
+    if (!neighbours(this.player).includes(target)) return 'invalid';
+    this.signals--;
+
+    if (target === this.ransomware) {
+      this.status = 'win';
+      return 'hit';
+    }
+
+    // Miss — ransomware may migrate (75% chance)
+    if (Math.random() < 0.75) {
+      const opts = neighbours(this.ransomware);
+      this.ransomware = opts[Math.floor(Math.random() * opts.length)];
+      // If it migrated onto the player, instant loss
+      if (this.ransomware === this.player) {
+        this.status    = 'lose';
+        this.loseReason = 'RANSOMWARE MIGRATED TO YOUR NODE — system breached during cooldown.';
+        return 'miss-dead';
+      }
+    }
+
+    if (this.signals <= 0) {
+      this.status    = 'lose';
+      this.loseReason = 'ALL KILL SIGNALS EXHAUSTED — no ammo remaining. Mission failed.';
+      return 'no-ammo';
+    }
+    return 'miss';
+  }
+}
+
+// ─────────────────────────── Renderer ───────────────────────────────
+// Pure DOM — reads from GameState, never mutates it.
+const Renderer = {
+  cells: [],   // flat array of <div> elements
+
+  buildGrid() {
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    this.cells = [];
+    for (let i = 0; i < TOTAL_NODES; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell fogged';
+      cell.dataset.idx = i;
+      const id = document.createElement('span');
+      id.className = 'cell-id';
+      id.textContent = String(i).padStart(2,'0');
+      cell.appendChild(id);
+      grid.appendChild(cell);
+      this.cells.push(cell);
+    }
+  },
+
+  render(state) {
+    const adj = new Set(neighbours(state.player));
+
+    this.cells.forEach((cell, i) => {
+      // Reset classes while keeping base 'cell'
+      cell.className = 'cell';
+      // Remove old icon
+      const icon = cell.querySelector('.cell-icon');
+      if (icon) icon.remove();
+
+      if (!state.revealed.has(i)) {
+        cell.classList.add('fogged');
+        return;
+      }
+
+      if (i === state.player) {
+        cell.classList.add('current');
+        this._addIcon(cell, '◈', 'var(--green)');
+        return;
+      }
+
+      if (adj.has(i)) {
+        cell.classList.add('adjacent');
+        if (state.mode === 'shoot') cell.classList.add('shoot-mode');
+      } else if (state.visited.has(i)) {
+        cell.classList.add('visited');
+      }
+    });
+
+    this.updatePanel(state);
+  },
+
+  revealAll(state) {
+    // Called on game over — show where all hazards were
+    this.cells.forEach((cell, i) => {
+      cell.className = 'cell visited';
+      const icon = cell.querySelector('.cell-icon');
+      if (icon) icon.remove();
+      if (i === state.ransomware) {
+        cell.classList.add('reveal-wumpus');
+        this._addIcon(cell, '☠', 'var(--red)');
+      } else if (state.panics.has(i)) {
+        cell.classList.add('reveal-pit');
+        this._addIcon(cell, '⚡', '#4444ff');
+      } else if (state.balancers.has(i)) {
+        cell.classList.add('reveal-bat');
+        this._addIcon(cell, '⇌', 'var(--yellow)');
+      } else if (i === state.player) {
+        this._addIcon(cell, '◈', 'var(--green)');
+      }
+    });
+  },
+
+  _addIcon(cell, char, color) {
+    const span = document.createElement('span');
+    span.className = 'cell-icon';
+    span.textContent = char;
+    span.style.color = color;
+    cell.appendChild(span);
+  },
+
+  flashCell(i, type) {
+    const cell = this.cells[i];
+    cell.classList.add(type === 'red' ? 'flash-red' : 'flash-green');
+    setTimeout(() => cell.classList.remove('flash-red', 'flash-green'), 600);
+  },
+
+  shakeGrid() {
+    const wrap = document.getElementById('grid-wrap');
+    wrap.classList.add('shake');
+    setTimeout(() => wrap.classList.remove('shake'), 400);
+  },
+
+  updatePanel(state) {
+    // Status text
+    const sts = document.getElementById('st-status');
+    const stNode = document.getElementById('st-node');
+    const stMode = document.getElementById('st-mode');
+    stNode.textContent = `NODE ${String(state.player).padStart(2,'0')}`;
+    if (state.status === 'playing') {
+      sts.textContent = 'ONLINE'; sts.className = 'stat-val';
+    } else if (state.status === 'win') {
+      sts.textContent = 'MISSION COMPLETE'; sts.className = 'stat-val';
+    } else {
+      sts.textContent = 'TERMINATED'; sts.className = 'stat-val danger';
+    }
+
+    stMode.textContent = state.mode.toUpperCase();
+    stMode.className   = state.mode === 'shoot' ? 'stat-val danger' : 'stat-val';
+
+    // Signal pips
+    const pips = document.getElementById('signal-pips');
+    pips.innerHTML = '';
+    for (let i = 0; i < MAX_SIGNALS; i++) {
+      const pip = document.createElement('div');
+      pip.className = 'pip' + (i >= state.signals ? ' spent' : '');
+      pips.appendChild(pip);
+    }
+
+    // Mode button
+    const modeBtn = document.getElementById('btn-mode');
+    if (state.mode === 'shoot') {
+      modeBtn.textContent = 'MODE: KILL SIGNAL [ARMED]';
+      modeBtn.className   = 'btn armed';
+    } else {
+      modeBtn.textContent = 'MODE: MOVE';
+      modeBtn.className   = 'btn';
+    }
+  }
+};
+
+// ─────────────────────────── Logger ─────────────────────────────────
+const Logger = {
+  _el: null,
+  _tick: 0,
+
+  init() {
+    this._el  = document.getElementById('log');
+    this._tick = 0;
+    this._el.innerHTML = '<span id="log-cursor">_</span>';
+  },
+
+  _ts() {
+    this._tick++;
+    const t = String(this._tick).padStart(4,'0');
+    return `<span class="log-ts">[${t}]</span>`;
+  },
+
+  log(msg, type='') {
+    const cursor = document.getElementById('log-cursor');
+    if (cursor) cursor.remove();
+
+    const line  = document.createElement('div');
+    line.className = 'log-line ' + type;
+    line.innerHTML = this._ts() + msg;
+    this._el.appendChild(line);
+
+    const cur = document.createElement('span');
+    cur.id = 'log-cursor'; cur.textContent = '_';
+    this._el.appendChild(cur);
+
+    this._el.scrollTop = this._el.scrollHeight;
+  },
+
+  sep() {
+    const line = document.createElement('div');
+    line.className = 'log-line dim';
+    line.innerHTML = '&nbsp;&nbsp;── ── ── ── ──';
+    this._el.appendChild(line);
+  }
+};
+
+// ─────────────────────────── Game controller ────────────────────────
+const Game = {
+  state: null,
+
+  init() {
+    this.state = new GameState();
+    this.state.revealAdjacent();
+
+    Renderer.buildGrid();
+    Logger.init();
+    document.getElementById('overlay').classList.remove('show');
+
+    Logger.log('SysAdmin session initialised.', 'info');
+    Logger.log(`Entry point: NODE ${String(this.state.player).padStart(2,'0')}`, 'info');
+    Logger.log('Scanning adjacent nodes…', 'dim');
+    Logger.sep();
+
+    this._emitClues();
+    Renderer.render(this.state);
+
+    // Attach click handlers
+    Renderer.cells.forEach((cell, i) => {
+      cell.onclick = () => this._onCellClick(i);
+    });
+  },
+
+  toggleMode() {
+    if (!this.state || this.state.status !== 'playing') return;
+    this.state.mode = this.state.mode === 'move' ? 'shoot' : 'move';
+    const label = this.state.mode === 'shoot'
+      ? 'KILL SIGNAL MODE ARMED — select target node.'
+      : 'Switched to MOVE mode.';
+    Logger.log(label, this.state.mode === 'shoot' ? 'warn' : 'info');
+    Renderer.render(this.state);
+  },
+
+  _onCellClick(i) {
+    const s = this.state;
+    if (!s || s.status !== 'playing') return;
+    if (!neighbours(s.player).includes(i)) {
+      this._invalidMove();
+      return;
+    }
+    if (s.mode === 'move') {
+      this._doMove(i);
+    } else {
+      this._doShoot(i);
+    }
+  },
+
+  _doMove(target) {
+    const s = this.state;
+    const result = s.movePlayer(target);
+    Logger.sep();
+
+    if (result === 'invalid') { this._invalidMove(); return; }
+
+    if (result === 'pit') {
+      Logger.log(`Moving to NODE ${String(target).padStart(2,'0')}…`, 'dim');
+      Renderer.flashCell(target, 'red');
+      Logger.log('KERNEL PANIC — memory fault at destination node!', 'error');
+      this._endGame();
+      return;
+    }
+    if (result === 'bat') {
+      Logger.log(`ROGUE LOAD BALANCER intercepted your connection!`, 'warn');
+      Logger.log(`Rerouted → NODE ${String(s.player).padStart(2,'0')}`, 'warn');
+    } else {
+      Logger.log(`SSH tunnel: NODE ${String(target).padStart(2,'0')} established.`, 'info');
+    }
+    if (result === 'wumpus') {
+      Logger.log('RANSOMWARE EXECUTED — filesystem encrypted!', 'error');
+      this._endGame();
+      return;
+    }
+
+    this._emitClues();
+    Renderer.render(s);
+  },
+
+  _doShoot(target) {
+    const s = this.state;
+    Logger.sep();
+    Logger.log(`FIRING Kill Signal → NODE ${String(target).padStart(2,'0')}…`, 'warn');
+    Renderer.flashCell(target, 'red');
+
+    const result = s.fireSignal(target);
+    s.mode = 'move';   // auto-disarm after shot
+
+    if (result === 'hit') {
+      Logger.log('DIRECT HIT — Ransomware process terminated!', 'success');
+      this._endGame();
+      return;
+    }
+    if (result === 'miss') {
+      Logger.log(`Signal dissipated — target not in NODE ${String(target).padStart(2,'0')}.`, 'warn');
+      Logger.log(`Ransomware may have migrated. Signals remaining: ${s.signals}`, 'warn');
+    }
+    if (result === 'miss-dead') {
+      Logger.log('Ransomware migrated to YOUR NODE during signal cooldown!', 'error');
+      this._endGame();
+      return;
+    }
+    if (result === 'no-ammo') {
+      Logger.log('ALL KILL SIGNALS EXHAUSTED. Mission failed.', 'error');
+      this._endGame();
+      return;
+    }
+
+    this._emitClues();
+    Renderer.render(s);
+  },
+
+  _invalidMove() {
+    Logger.log('ERR: Invalid routing. Firewall detected.', 'error');
+    Renderer.shakeGrid();
+  },
+
+  _emitClues() {
+    const clues = this.state.hazardClues();
+    if (clues.length === 0) {
+      Logger.log('All adjacent nodes nominal. No threats detected.', 'dim');
+      return;
+    }
+    if (clues.includes('cpu'))
+      Logger.log('⚠ High CPU load detected nearby. Ransomware is close.', 'error');
+    if (clues.includes('leak'))
+      Logger.log('⚠ Critical memory leaks in adjacent nodes. Kernel Panic nearby.', 'warn');
+    if (clues.includes('routing'))
+      Logger.log('~ Erratic packet routing detected. Rogue Load Balancer nearby.', 'warn');
+  },
+
+  _endGame() {
+    const s = this.state;
+    Renderer.revealAll(s);
+    Renderer.updatePanel(s);
+
+    setTimeout(() => {
+      const overlay = document.getElementById('overlay');
+      const box     = document.getElementById('overlay-box');
+      const title   = document.getElementById('overlay-title');
+      const msg     = document.getElementById('overlay-msg');
+
+      overlay.classList.add('show');
+
+      if (s.status === 'win') {
+        box.className    = '';
+        title.className  = 'win';
+        title.textContent = 'MISSION COMPLETE';
+        msg.innerHTML    = 'Zero-Day Ransomware has been neutralised.<br>Network cluster secured.<br><br>'
+          + `<small>Signals used: ${MAX_SIGNALS - s.signals} / ${MAX_SIGNALS}</small>`;
+      } else {
+        box.className    = 'lose';
+        title.className  = 'lose';
+        title.textContent = 'MISSION FAILED';
+        msg.innerHTML    = s.loseReason + '<br><br>'
+          + '<small>Initiating disaster recovery protocol…</small>';
+      }
+    }, 700);
+  }
+};
+
+// ─────────────────────────── Keyboard input ─────────────────────────
+document.addEventListener('keydown', e => {
+  const s = Game.state;
+  if (!s || s.status !== 'playing') return;
+
+  // Toggle mode
+  if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    e.preventDefault();
+    Game.toggleMode();
+    return;
+  }
+
+  // Movement / shoot direction
+  const dirMap = {
+    ArrowUp:'up', KeyW:'up',
+    ArrowDown:'down', KeyS:'down',
+    ArrowLeft:'left', KeyA:'left',
+    ArrowRight:'right', KeyD:'right',
+  };
+  const dir = dirMap[e.code];
+  if (!dir) return;
+  e.preventDefault();
+
+  const r = row(s.player), c = col(s.player);
+  let target = -1;
+  if (dir==='up'    && r > 0)            target = idx(r-1, c);
+  if (dir==='down'  && r < GRID_SIZE-1)  target = idx(r+1, c);
+  if (dir==='left'  && c > 0)            target = idx(r, c-1);
+  if (dir==='right' && c < GRID_SIZE-1)  target = idx(r, c+1);
+
+  if (target === -1) { Game._invalidMove(); return; }
+
+  if (s.mode === 'move')  Game._doMove(target);
+  else                    Game._doShoot(target);
+});
+
+// ─────────────────────────── Boot ───────────────────────────────────
+Game.init();
+</script>
+</body>
+</html>
